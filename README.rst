@@ -1,3 +1,9 @@
+DXC Iberia Extensions
+=====================
+
+DXC Iberia has extended certauth to a new use case where certificates are stored in AWS SSM Parameter Store,
+and to be able to generate client certificates too.
+
 Certificate Authority Certificate Maker Tools
 =============================================
 
@@ -78,6 +84,17 @@ A custom cache implementations which stores and retrieves per-host certificates 
           cert_string = ...
           return cert_string
 
+AWS SSM Cache
+~~~~~~~~~~~~
+
+A custom cache that stores certificates under an AWS SSM Paremeter Store prefix.
+
+SSM parameters are limited to letters, digits and the symbols / . - and _ where / are interpreted as path separators.
+
+Certificate names are modified replacing any other symbol besides these by - 
+
+The AWS client environment must provide a proper way for the SDK to find credentials and the default region, for 
+example setting them in the environment or in the credentials and/or config files.
 
 Wildcard Certs
 ~~~~~~~~~~~~~~
@@ -144,12 +161,14 @@ CLI Usage Examples
                         Name for root certificate
     -n HOSTNAME, --hostname HOSTNAME
                         Hostname certificate to create
+    -l CLIENT_NAME --clientname CLIENT_NAME
+                        Name of the client certificate to create
+    -s SSM_PREFIX --ssm_prefix SSM_PREFIX
+                        Prefix of the SSM parameters created. It is added a heading and trailing '/' if not present
     -d CERTS_DIR, --certs-dir CERTS_DIR
                         Directory for host certificates
     -f, --force           Overwrite certificates if they already exist
     -w, --wildcard_cert   add wildcard SAN to host: *.<host>, <host>
-
-
 
 To create a new root CA certificate:
 
@@ -167,6 +186,14 @@ If it already exists, it will not be overwritten (unless ``-f`` option is used).
 
 The ``-w`` option can be used to create a wildcard cert which has subject alternate names (SAN) for ``example.com`` and ``*.example.com``
 
+To create a client certificate
+
+``certauth myrootca.pem --clientname "example" -d ./certs_dir``
+
+To create certificates in AWS SSM:
+
+``certauth myrootca.pem -s MyRootCA --clientname "example"``
+``certauth myrootca.pem --ssm_prefix MyRootCA --hostname "example.com"``
 
 History
 =======
@@ -178,4 +205,5 @@ It was also extended in `warcprox <https://github.com/internetarchive/warcprox>`
 The CA functionality was also reused in `pywb <https://github.com/ikreymer/pywb>`_ and finally factored out into this separate package for modularity.
 
 It is now also used by `wsgiprox <https://github.com/webrecorder/wsgiprox>`_ to provide a generalized HTTPS proxy wrapper to any WSGI application.
+
 

@@ -1,0 +1,377 @@
+{
+  "Description" : "(0.0.1) SSM Backed Certificate Authority",
+  "Mappings" : {
+    "Constants": {
+      "ProjectName": {"Value":"SSM-CA","LowCaseValue":"ssm-ca"},
+      "Version": {"Value":"0-0-1"}
+    }
+  },
+  "Parameters" : {
+    "ParametersPrefix": {
+      "Type": "String"
+    }
+  },
+  "Resources" : {
+    "SsmAutomationRole": {
+      "Type" : "AWS::IAM::Role",
+      "Properties" : {
+        "Path" : {"Fn::Join":["",["/",{"Fn::FindInMap": ["Constants","ProjectName","LowCaseValue"]},"/"]]},
+        "AssumeRolePolicyDocument" : {
+          "Version": "2008-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                   "ssm.amazonaws.com",
+                   "ec2.amazonaws.com"
+                ]
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns" : ["arn:aws:iam::aws:policy/ReadOnlyAccess"],
+        "Policies" : [
+          {
+            "PolicyName":"ScriptPrivileges",
+            "PolicyDocument": {
+              "Version":"2012-10-17",
+              "Statement": [
+                {
+                  "Sid":"KmsKey",
+                  "Effect":"Allow",
+                  "Action": [
+                    "kms:*"
+                  ],
+                  "Resource": [
+                    "*"
+                  ]
+                },
+                {
+                  "Sid":"SsmManagement",
+                  "Effect":"Allow",
+                  "Action": [
+                    "ssm:*"
+                  ],
+                  "Resource":"*"
+                },
+                {
+                  "Sid":"SnsManagement",
+                  "Effect":"Allow",
+                  "Action": [
+                    "sns:*"
+                  ],
+                  "Resource":"*"
+                },
+                {
+                  "Sid":"SecretsManager",
+                  "Effect":"Allow",
+                  "Action":[
+                    "secretsmanager:*"
+                  ],
+                  "Resource":"*"
+                }
+              ]
+            }
+          }
+        ],
+        "Tags" : [
+           {"Key":"lz:cfnstack:name","Value" : {"Ref":"AWS::StackName"}},
+           {"Key":"lz:cfnstack:region","Value" : {"Ref":"AWS::Region"}},
+           {"Key":"lz:project","Value" : {"Fn::FindInMap": ["Constants","ProjectName","Value"]}}
+        ]
+      }
+    },
+    "Automation": {
+      "Type" : "AWS::SSM::Document",
+      "Properties" : {
+        "DocumentType" : "Automation",
+        "Tags" : [
+           {"Key":"lz:project","Value" : {"Fn::FindInMap": ["Constants","ProjectName","Value"]}},
+           {"Key":"lz:automation:operation","Value" : "Backup"}
+        ],
+        "Content" : {
+          "schemaVersion":"0.3",
+          "description": "Creates and Operates a Certificate Authority",
+          "assumeRole": {"Fn::GetAtt":"SsmAutomationRole.Arn"},
+          "parameters": {
+            "CaName": {
+              "type":"String"
+            },
+            "Operation": {
+              "type":"String",
+              "allowedValues": ["NewServer","NewClient"]
+            },
+            "CommonName": {
+              "type": "String"
+            },
+            ""
+          },
+          "mainSteps": [
+            {
+              "name": "LoadSsmParameters",
+              "action":"aws:executeScript",
+              "onFailure":"Abort",
+              "inputs": {
+                "Runtime": "python3.6",
+                "Handler": "handler",
+                "InputPayload": {"prefix":{"Fn::Sub":["${prefix}{{Environment}}/",{
+                  "prefix": {"Fn::Sub":["/${project}/",{
+                      "project":{"Fn::FindInMap":["Constants","ProjectName","Value"]}
+                    }]}
+                }]}},
+                "Script": {"Fn::Join":["",[
+                  "import boto3\n",
+                  "def handler(events,context):\n",
+                  "  result={}\n",
+                  "  prefix=events['prefix']\n",
+                  "  ssm=boto3.client('ssm')\n",
+                  "  paginator = ssm.get_paginator('get_parameters_by_path')\n",
+                  "  iterator = paginator.paginate(Path=prefix,Recursive=True,WithDecryption=True)\n",
+                  "  for page in iterator:\n",
+                  "    parameters = page['Parameters']\n",
+                  "    for p in parameters:\n",
+                  "      name = p['Name'][len(prefix):]\n",
+                  "      result[name] = p['Value']\n",
+                  "  return result"
+                ]]}
+              },
+              "outputs": [
+                {
+                  "Name":"TemplatesS3Url",
+                  "Selector":"$.Payload.TemplatesS3Url",
+                  "Type":"String"
+                },
+                {
+                  "Name":"AZ",
+                  "Selector":"$.Payload.AZ",
+                  "Type":"String"
+                },
+                {
+                  "Name":"InstanceType",
+                  "Selector":"$.Payload.InstanceType",
+                  "Type":"String"
+                },
+                {
+                  "Name":"DNS",
+                  "Selector":"$.Payload.DNS",
+                  "Type":"String"
+                },
+                {
+                  "Name":"ScheduleTag",
+                  "Selector":"$.Payload.ScheduleTag",
+                  "Type":"String"
+                },
+                {
+                  "Name":"DatabaseInstanceType",
+                  "Selector":"$.Payload.DatabaseInstanceType",
+                  "Type":"String"
+                },
+                {
+                  "Name":"DatabaseStorageType",
+                  "Selector":"$.Payload.DatabaseStorageType",
+                  "Type":"String"
+                },
+                {
+                  "Name":"IOPS",
+                  "Selector":"$.Payload.IOPS",
+                  "Type":"String"
+                },
+                {
+                  "Name":"DatabaseStorage",
+                  "Selector":"$.Payload.DatabaseStorage",
+                  "Type":"String"
+                },
+                {
+                  "Name":"DatabasePort",
+                  "Selector":"$.Payload.DatabasePort",
+                  "Type":"String"
+                }
+              ]
+            },
+            {
+              "name": "ValidateParameters",
+              "action":"aws:executeScript",
+              "onFailure":"Abort",
+              "inputs": {
+                "Runtime": "python3.6",
+                "Handler": "handler",
+                "InputPayload": {
+                  "TemplatesS3Url": "{{LoadSsmParameters.TemplatesS3Url}}"
+                },
+                "Script": {"Fn::Join":["",[
+                  "import boto3\n",
+                  "import re\n",
+                  "def handler(event,context):\n",
+                  "  result = {}\n",
+                  "  m = re.match('https:\/\/(.+)\\.s3\\.(.*)\\.amazonaws.com\/(.*)',event['TemplatesS3Url'])\n",
+                  "  result['TemplatesS3LocationURI']= 's3:\/\/%s\/%s' % (m.groups()[0],m.groups()[2])\n",
+                  "  return result"
+                ]]}
+              },
+              "outputs": [
+                {
+                  "Name":"TemplatesS3LocationURI",
+                  "Selector":"$.Payload.TemplatesS3LocationURI",
+                  "Type":"String"
+                }
+              ]
+            },
+            {
+              "name": "CollectStacksOutput",
+              "action":"aws:executeScript",
+              "onFailure":"Abort",
+              "inputs": {
+                "Runtime": "python3.6",
+                "Handler": "handler",
+                "InputPayload": {
+                   "environment":"{{Environment}}",
+                   "stack-names": [
+                     {"Fn::Sub":["${project}-{{Environment}}-ServerInstance",{
+                       "project": {"Fn::FindInMap":["Constants","ProjectName","Value"]}
+                     }]}
+                   ] 
+                },
+                "Script": {"Fn::Join":["",[
+                  "import boto3\n",
+                  "def handler(events,context):\n",
+                  "  result={}\n",
+                  "  stacknames=events['stack-names']\n",
+                  "  cfn=boto3.client('cloudformation')\n",
+                  "  paginator=cfn.get_paginator('list_stacks')\n",
+                  "  response_iterator=paginator.paginate()\n",
+                  "  for page in response_iterator:\n",
+                  "    stacks = page['StackSummaries']\n",
+                  "    for stack in stacks:\n",
+                  "      if stack['StackName'] in stacknames:\n",
+                  "        if stack['StackStatus'] in ['CREATE_COMPLETE','UPDATE_COMPLETE','UPDATE_ROLLBACK_COMPLETE']:\n",
+                  "           info = cfn.describe_stacks(StackName=stack['StackId'])\n",
+                  "           stack_result={}\n",
+                  "           for o in info['Stacks'][0]['Outputs']:\n",
+                  "             key = o['OutputKey']\n",
+                  "             stack_result[key]=o['OutputValue']\n",
+                  "           result[stack['StackName'].replace(events['environment'],'ENV').replace('-','')]=stack_result\n",
+                  "  return result"
+                ]]}
+              },
+              "outputs": [
+                {
+                  "Name":"InstanceId",
+                  "Selector":{"Fn::Sub":["$.Payload.${project}ENVServerInstance.InstanceId",{
+                       "project": {"Fn::FindInMap":["Constants","ProjectName","Value"]}
+                     }]},
+                  "Type":"String"
+                }
+              ]
+            },
+            {
+              "name":"ProvisionBackupVolume",
+              "action":"aws:executeAwsApi",
+              "inputs": {
+                "Service":"ec2",
+                "Api":"CreateVolume",
+                "AvailabilityZone":{"Fn::Join":["",[{"Ref":"AWS::Region"},"{{LoadSsmParameters.AZ}}"]]},
+                "Size":"{{BackupDiskSize}}",
+                "VolumeType":"standard",
+                "TagSpecifications": [
+                  {
+                    "ResourceType":"volume",
+                    "Tags": [
+                      { "Key":"Name","Value":"TemporaryProcessMakerBackup"},
+                      { "Key":"InstanceId","Value":"{{CollectStacksOutput.InstanceId}}"},
+                      { "Key":"lz:project","Value":{"Fn::FindInMap":["Constants","ProjectName","Value"]}},
+                      { "Key":"lz:environment","Value":"{{Environment}}"},
+                      { "Key":"lz:paymentCode","Value":{"Fn::FindInMap":["Constants","ProjectName","Value"]}}
+                    ]
+                  }
+                ]
+              },
+              "outputs": [
+                {
+                  "Name":"VolumeId",
+                  "Selector":"$.VolumeId",
+                  "Type":"String" 
+                }
+              ]
+            },
+            {
+              "name":"WaitForVolumeAvailable",
+              "action":"aws:waitForAwsResourceProperty",
+              "inputs": {
+                "Service":"ec2",
+                "Api":"DescribeVolumes",
+                "VolumeIds": ["{{ProvisionBackupVolume.VolumeId}}"],
+                "PropertySelector":"$.Volumes[0].State",
+                "DesiredValues":["available"]
+              }
+            },
+            {
+              "name":"AttachBackupVolume",
+              "action":"aws:executeAwsApi",
+              "inputs": {
+                "Service":"ec2",
+                "Api":"AttachVolume",
+                "Device":"\/dev\/xvdg",
+                "InstanceId":"{{CollectStacksOutput.InstanceId}}",
+                "VolumeId":"{{ProvisionBackupVolume.VolumeId}}"
+              }
+            },  
+            {
+              "name":"WaitForOSToShowDevice",
+              "action":"aws:sleep",
+              "inputs": {
+                "Duration":"PT30S"
+              }
+            },  
+            {
+              "name":"DoBackup",
+              "action":"aws:runCommand",
+              "onFailure":"step:DetachBackupVolume",
+              "inputs": {
+                "DocumentName":{"Ref":"BackupCommand"},
+                "InstanceIds":["{{CollectStacksOutput.InstanceId}}"],
+                "Parameters": {
+                  "S3Destination":["{{BackupS3Location}}"],
+                  "ScriptS3Location":["{{ValidateParameters.TemplatesS3LocationURI}}/Environment/scripts/operation"],
+                  "LocalDestination":["\/mnt\/backup"]
+                }
+              }
+            },
+            {
+              "name":"DetachBackupVolume",
+              "action":"aws:executeAwsApi",
+              "inputs": {
+                "Service":"ec2",
+                "Api":"DetachVolume",
+                "Device":"\/dev\/xvdg",
+                "InstanceId":"{{CollectStacksOutput.InstanceId}}",
+                "VolumeId":"{{ProvisionBackupVolume.VolumeId}}"
+              }
+            },
+            {
+              "name":"WaitForVolumeAvailableToDelete",
+              "action":"aws:waitForAwsResourceProperty",
+              "inputs": {
+                "Service":"ec2",
+                "Api":"DescribeVolumes",
+                "VolumeIds": ["{{ProvisionBackupVolume.VolumeId}}"],
+                "PropertySelector":"$.Volumes[0].State",
+                "DesiredValues":["available"]
+              }
+            },
+            {
+              "name":"DeleteBackupVolume",
+              "action":"aws:executeAwsApi",
+              "inputs": {
+                "Service":"ec2",
+                "Api":"DeleteVolume",
+                "VolumeId":"{{ProvisionBackupVolume.VolumeId}}"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -34,6 +34,7 @@ setup(
     install_requires=[
         'pyopenssl',
         'tldextract',
+        'boto3'
         ],
     zip_safe=True,
     entry_points="""
