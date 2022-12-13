@@ -7,6 +7,9 @@
     }
   },
   "Parameters" : {
+    "TemplatesS3Url":{
+      "Type" : "String"
+    },
     "ParametersPrefix": {
       "Type": "String"
     }
@@ -83,289 +86,218 @@
         ]
       }
     },
-    "Automation": {
+    "CreateCertificateAuthority": {
       "Type" : "AWS::SSM::Document",
       "Properties" : {
         "DocumentType" : "Automation",
+        "Attachments":[
+           {
+            "Key":"S3FileUrl",
+            "Values":[{"Fn::Sub":"${TemplatesS3Url}/@ARTIFACT@"}]
+           }
+        ],
         "Tags" : [
            {"Key":"lz:project","Value" : {"Fn::FindInMap": ["Constants","ProjectName","Value"]}},
            {"Key":"lz:automation:operation","Value" : "Backup"}
         ],
         "Content" : {
           "schemaVersion":"0.3",
-          "description": "Creates and Operates a Certificate Authority",
+          "description": "Creates a Certificate Authority",
           "assumeRole": {"Fn::GetAtt":"SsmAutomationRole.Arn"},
           "parameters": {
             "CaName": {
               "type":"String"
             },
-            "Operation": {
-              "type":"String",
-              "allowedValues": ["NewServer","NewClient"]
-            },
             "CommonName": {
               "type": "String"
+            },
+            "ParametersPrefix": {
+              "type": "String",
+              "default": {"Fn::Sub":"${ParametersPrefix}"}
+            },
+            "Overwrite": {
+              "type": "Boolean",
+              "default": "false"
+            }
+          },
+          "files":{
+            "ssm-certaut-0.0.1-SNAPSHOT-ssm.zip": {
+              "checksums":{
+                "sha256":"@SHA256@"
+              }
             }
           },
           "mainSteps": [
             {
-              "name": "LoadSsmParameters",
+              "name": "CheckIfCaExists",
               "action":"aws:executeScript",
               "onFailure":"Abort",
               "inputs": {
-                "Runtime": "python3.6",
+                "Runtime": "python3.8",
                 "Handler": "handler",
-                "InputPayload": {"prefix":{"Fn::Sub":["${prefix}{{Environment}}/",{
-                  "prefix": {"Fn::Sub":["/${project}/",{
-                      "project":{"Fn::FindInMap":["Constants","ProjectName","Value"]}
-                    }]}
-                }]}},
+                "InputPayload": {
+                  "prefix":"{{ParametersPrefix}}",
+                  "CaName":"{{CaName}}",
+                  "CommonName":"{{CommonName}}",
+                  "Overwrite":"{{Overwrite}}"
+                },
                 "Script": {"Fn::Join":["",[
                   "import boto3\n",
                   "def handler(events,context):\n",
-                  "  result={}\n",
                   "  prefix=events['prefix']\n",
+                  "  prefix= prefix if prefix.endswith('/') else f'{prefix}/'\n",
+                  "  ca_name=events['CaName']\n",
+                  "  common_name=events['CommonName']\n",
+                  "  overwrite=(events['Overwrite'].lower()=='true')\n",
                   "  ssm=boto3.client('ssm')\n",
-                  "  paginator = ssm.get_paginator('get_parameters_by_path')\n",
-                  "  iterator = paginator.paginate(Path=prefix,Recursive=True,WithDecryption=True)\n",
-                  "  for page in iterator:\n",
-                  "    parameters = page['Parameters']\n",
-                  "    for p in parameters:\n",
-                  "      name = p['Name'][len(prefix):]\n",
-                  "      result[name] = p['Value']\n",
-                  "  return result"
+                  "  result = ssm.get_parameters_by_path(Path=f'{prefix}{ca_name}/',Recursive=True,WithDecryption=True)\n",
+                  "  if len(result['Parameters']) > 0:\n",
+                  "    exists = True\n",
+                  "    if not overwrite:\n",
+                  "      raise Exception(f'Certificate Authority {prefix}{ca_name} already exists. Set Overwrite to true to overwrite')\n",
+                  "  else:\n",
+                  "    exists = False\n",
+                  "  args = f'{ca_name} -c \"{common_name}\" -s \"{prefix}\" ' + ('-f' if (exists and overwrite) else '')\n",
+                  "  return {'Args': args}\n"
                 ]]}
               },
               "outputs": [
                 {
-                  "Name":"TemplatesS3Url",
-                  "Selector":"$.Payload.TemplatesS3Url",
-                  "Type":"String"
-                },
-                {
-                  "Name":"AZ",
-                  "Selector":"$.Payload.AZ",
-                  "Type":"String"
-                },
-                {
-                  "Name":"InstanceType",
-                  "Selector":"$.Payload.InstanceType",
-                  "Type":"String"
-                },
-                {
-                  "Name":"DNS",
-                  "Selector":"$.Payload.DNS",
-                  "Type":"String"
-                },
-                {
-                  "Name":"ScheduleTag",
-                  "Selector":"$.Payload.ScheduleTag",
-                  "Type":"String"
-                },
-                {
-                  "Name":"DatabaseInstanceType",
-                  "Selector":"$.Payload.DatabaseInstanceType",
-                  "Type":"String"
-                },
-                {
-                  "Name":"DatabaseStorageType",
-                  "Selector":"$.Payload.DatabaseStorageType",
-                  "Type":"String"
-                },
-                {
-                  "Name":"IOPS",
-                  "Selector":"$.Payload.IOPS",
-                  "Type":"String"
-                },
-                {
-                  "Name":"DatabaseStorage",
-                  "Selector":"$.Payload.DatabaseStorage",
-                  "Type":"String"
-                },
-                {
-                  "Name":"DatabasePort",
-                  "Selector":"$.Payload.DatabasePort",
+                  "Name":"Args",
+                  "Selector":"$.Payload.Args",
                   "Type":"String"
                 }
               ]
             },
             {
-              "name": "ValidateParameters",
+              "name": "CreateCertificateAuthority",
               "action":"aws:executeScript",
               "onFailure":"Abort",
               "inputs": {
-                "Runtime": "python3.6",
-                "Handler": "handler",
+                "Runtime": "python3.8",
+                "Handler": "certauth.py.handler",
                 "InputPayload": {
-                  "TemplatesS3Url": "{{LoadSsmParameters.TemplatesS3Url}}"
+                  "args":"{{CheckIfCaExists.Args}}"
                 },
-                "Script": {"Fn::Join":["",[
-                  "import boto3\n",
-                  "import re\n",
-                  "def handler(event,context):\n",
-                  "  result = {}\n",
-                  "  m = re.match('https:\/\/(.+)\\.s3\\.(.*)\\.amazonaws.com\/(.*)',event['TemplatesS3Url'])\n",
-                  "  result['TemplatesS3LocationURI']= 's3:\/\/%s\/%s' % (m.groups()[0],m.groups()[2])\n",
-                  "  return result"
-                ]]}
-              },
-              "outputs": [
-                {
-                  "Name":"TemplatesS3LocationURI",
-                  "Selector":"$.Payload.TemplatesS3LocationURI",
-                  "Type":"String"
-                }
-              ]
+                "Attachment":"ssm-certaut-0.0.1-SNAPSHOT-ssm.zip"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "NewServerCertificate": {
+      "Type" : "AWS::SSM::Document",
+      "Properties" : {
+        "DocumentType" : "Automation",
+        "Attachments":[
+           {
+            "Key":"S3FileUrl",
+            "Values":[{"Fn::Sub":"${TemplatesS3Url}/target/ssm-certauth-0.0.1-SNAPSHOT-ssm.zip"}]
+           }
+        ],
+        "Tags" : [
+           {"Key":"lz:project","Value" : {"Fn::FindInMap": ["Constants","ProjectName","Value"]}},
+           {"Key":"lz:automation:operation","Value" : "SSM-CA.NewServerCertificate"}
+        ],
+        "Content" : {
+          "schemaVersion":"0.3",
+          "description": "Creates a new Server Certificate",
+          "assumeRole": {"Fn::GetAtt":"SsmAutomationRole.Arn"},
+          "parameters": {
+            "CaName": {
+              "type":"String"
             },
+            "CommonName": {
+              "type": "String"
+            },
+            "IPs": {
+              "type": "String"
+            },
+            "FQDNs": {
+              "type": "String"
+            },
+            "Wildcard": {
+              "type": "String",
+              "allowedValues":["true","false"],
+              "default":"false"
+            },
+            "ParametersPrefix": {
+              "type": "String",
+              "default": {"Fn::Sub":"${ParametersPrefix}"}
+            },
+            "Overwrite": {
+              "type": "Boolean",
+              "default": "false"
+            }
+          },
+          "files":{
+            "ssm-certaut-0.0.1-SNAPSHOT-ssm.zip": {
+              "checksums":{
+                "sha256":"833e6ed821398dc49b78e3b05605f5a43cec58d9a3111e315686fce07823cb67"
+              }
+            }
+          },
+          "mainSteps": [
             {
-              "name": "CollectStacksOutput",
+              "name": "CheckIfCaExists",
               "action":"aws:executeScript",
               "onFailure":"Abort",
               "inputs": {
-                "Runtime": "python3.6",
+                "Runtime": "python3.8",
                 "Handler": "handler",
                 "InputPayload": {
-                   "environment":"{{Environment}}",
-                   "stack-names": [
-                     {"Fn::Sub":["${project}-{{Environment}}-ServerInstance",{
-                       "project": {"Fn::FindInMap":["Constants","ProjectName","Value"]}
-                     }]}
-                   ] 
+                  "prefix":"{{ParametersPrefix}}",
+                  "CaName":"{{CaName}}",
+                  "CommonName":"{{CommonName}}",
+                  "Overwrite":"{{Overwrite}}",
+                  "IPs":"{{IPs}}",
+                  "FQDNs":"{{FQDNs}}",
+                  "Wildcard":"{{Wildcard}}"
                 },
                 "Script": {"Fn::Join":["",[
                   "import boto3\n",
                   "def handler(events,context):\n",
-                  "  result={}\n",
-                  "  stacknames=events['stack-names']\n",
-                  "  cfn=boto3.client('cloudformation')\n",
-                  "  paginator=cfn.get_paginator('list_stacks')\n",
-                  "  response_iterator=paginator.paginate()\n",
-                  "  for page in response_iterator:\n",
-                  "    stacks = page['StackSummaries']\n",
-                  "    for stack in stacks:\n",
-                  "      if stack['StackName'] in stacknames:\n",
-                  "        if stack['StackStatus'] in ['CREATE_COMPLETE','UPDATE_COMPLETE','UPDATE_ROLLBACK_COMPLETE']:\n",
-                  "           info = cfn.describe_stacks(StackName=stack['StackId'])\n",
-                  "           stack_result={}\n",
-                  "           for o in info['Stacks'][0]['Outputs']:\n",
-                  "             key = o['OutputKey']\n",
-                  "             stack_result[key]=o['OutputValue']\n",
-                  "           result[stack['StackName'].replace(events['environment'],'ENV').replace('-','')]=stack_result\n",
-                  "  return result"
+                  "  prefix=events['prefix']\n",
+                  "  prefix= prefix if prefix.endswith('/') else f'{prefix}/'\n",
+                  "  ca_name=events['CaName']\n",
+                  "  common_name=events['CommonName']\n",
+                  "  overwrite=(events['Overwrite'].lower()=='true')\n",
+                  "  ssm=boto3.client('ssm')\n",
+                  "  result = ssm.get_parameters_by_path(Path=f'{prefix}{ca_name}/',Recursive=True,WithDecryption=True)\n",
+                  "  if not len(result['Parameters']) > 0:\n",
+                  "    exists = False\n",
+                  "    raise Exception(f'Certificate Authority {prefix}{ca_name} does not exist.')\n",
+                  "  else:\n",
+                  "    exists = True\n",
+                  "  fqdns = events['FQDNs'].strip()\n",
+                  "  fqdns = f'--cert_fqdns \"{fqdns}\"' if len(fqdns)>0 else ''\n",
+                  "  ips = events['IPs'].strip()\n",
+                  "  ips = f'--cert_ips \"{ips}\"' if len(ips)>0 else ''\n",
+                  "  wildcard = '--wildcard_cert' if event['Wildcard'].lower() == 'true' else ''\n",
+                  "  args = f'{ca_name} -s \"{prefix}\" -n {common_name}'+ f' {fqdns} {ips} {wildcard} ' + ('-f' if overwrite and  else '')\n",
+                  "  return {'Args': args}\n"
                 ]]}
               },
               "outputs": [
                 {
-                  "Name":"InstanceId",
-                  "Selector":{"Fn::Sub":["$.Payload.${project}ENVServerInstance.InstanceId",{
-                       "project": {"Fn::FindInMap":["Constants","ProjectName","Value"]}
-                     }]},
+                  "Name":"Args",
+                  "Selector":"$.Payload.Args",
                   "Type":"String"
                 }
               ]
             },
             {
-              "name":"ProvisionBackupVolume",
-              "action":"aws:executeAwsApi",
+              "name": "CreateCertificate",
+              "action":"aws:executeScript",
+              "onFailure":"Abort",
               "inputs": {
-                "Service":"ec2",
-                "Api":"CreateVolume",
-                "AvailabilityZone":{"Fn::Join":["",[{"Ref":"AWS::Region"},"{{LoadSsmParameters.AZ}}"]]},
-                "Size":"{{BackupDiskSize}}",
-                "VolumeType":"standard",
-                "TagSpecifications": [
-                  {
-                    "ResourceType":"volume",
-                    "Tags": [
-                      { "Key":"Name","Value":"TemporaryProcessMakerBackup"},
-                      { "Key":"InstanceId","Value":"{{CollectStacksOutput.InstanceId}}"},
-                      { "Key":"lz:project","Value":{"Fn::FindInMap":["Constants","ProjectName","Value"]}},
-                      { "Key":"lz:environment","Value":"{{Environment}}"},
-                      { "Key":"lz:paymentCode","Value":{"Fn::FindInMap":["Constants","ProjectName","Value"]}}
-                    ]
-                  }
-                ]
-              },
-              "outputs": [
-                {
-                  "Name":"VolumeId",
-                  "Selector":"$.VolumeId",
-                  "Type":"String" 
-                }
-              ]
-            },
-            {
-              "name":"WaitForVolumeAvailable",
-              "action":"aws:waitForAwsResourceProperty",
-              "inputs": {
-                "Service":"ec2",
-                "Api":"DescribeVolumes",
-                "VolumeIds": ["{{ProvisionBackupVolume.VolumeId}}"],
-                "PropertySelector":"$.Volumes[0].State",
-                "DesiredValues":["available"]
-              }
-            },
-            {
-              "name":"AttachBackupVolume",
-              "action":"aws:executeAwsApi",
-              "inputs": {
-                "Service":"ec2",
-                "Api":"AttachVolume",
-                "Device":"\/dev\/xvdg",
-                "InstanceId":"{{CollectStacksOutput.InstanceId}}",
-                "VolumeId":"{{ProvisionBackupVolume.VolumeId}}"
-              }
-            },  
-            {
-              "name":"WaitForOSToShowDevice",
-              "action":"aws:sleep",
-              "inputs": {
-                "Duration":"PT30S"
-              }
-            },  
-            {
-              "name":"DoBackup",
-              "action":"aws:runCommand",
-              "onFailure":"step:DetachBackupVolume",
-              "inputs": {
-                "DocumentName":{"Ref":"BackupCommand"},
-                "InstanceIds":["{{CollectStacksOutput.InstanceId}}"],
-                "Parameters": {
-                  "S3Destination":["{{BackupS3Location}}"],
-                  "ScriptS3Location":["{{ValidateParameters.TemplatesS3LocationURI}}/Environment/scripts/operation"],
-                  "LocalDestination":["\/mnt\/backup"]
-                }
-              }
-            },
-            {
-              "name":"DetachBackupVolume",
-              "action":"aws:executeAwsApi",
-              "inputs": {
-                "Service":"ec2",
-                "Api":"DetachVolume",
-                "Device":"\/dev\/xvdg",
-                "InstanceId":"{{CollectStacksOutput.InstanceId}}",
-                "VolumeId":"{{ProvisionBackupVolume.VolumeId}}"
-              }
-            },
-            {
-              "name":"WaitForVolumeAvailableToDelete",
-              "action":"aws:waitForAwsResourceProperty",
-              "inputs": {
-                "Service":"ec2",
-                "Api":"DescribeVolumes",
-                "VolumeIds": ["{{ProvisionBackupVolume.VolumeId}}"],
-                "PropertySelector":"$.Volumes[0].State",
-                "DesiredValues":["available"]
-              }
-            },
-            {
-              "name":"DeleteBackupVolume",
-              "action":"aws:executeAwsApi",
-              "inputs": {
-                "Service":"ec2",
-                "Api":"DeleteVolume",
-                "VolumeId":"{{ProvisionBackupVolume.VolumeId}}"
+                "Runtime": "python3.8",
+                "Handler": "certauth.py.handler",
+                "InputPayload": {
+                  "args":"{{CheckIfCaExists.Args}}"
+                },
+                "Attachment":"ssm-certaut-0.0.1-SNAPSHOT-ssm.zip"
               }
             }
           ]

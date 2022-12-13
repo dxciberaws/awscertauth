@@ -6,6 +6,8 @@
   <properties>
    <artifactrepo.url>s3://automation-dxciber-ops</artifactrepo.url>
    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+   <replacer.version>1.5.3</replacer.version>
+   <template.file>SSM-CertAuth.template</template.file>
   </properties>
   <repositories>
     <repository>
@@ -20,6 +22,8 @@
     </repository>
   </repositories>
   <build>
+    <directory>${basedir}/target</directory>
+    <finalName>${project.artifactId}-${project.version}</finalName>
     <extensions>
       <extension>
         <groupId>com.github.platform-team</groupId>
@@ -45,15 +49,15 @@
 		     </execution>
 		   </executions>
 		</plugin>    
-        <plugin>
+    <plugin>
 	        <groupId>org.apache.maven.plugins</groupId>
 	        <artifactId>maven-surefire-plugin</artifactId>
 	        <version>2.22.0</version>
 	        <configuration>
 	          <skipTests>true</skipTests>
 	        </configuration>
-	    </plugin>
-      <plugin>
+	  </plugin>
+    <plugin>
         <artifactId>maven-jar-plugin</artifactId>
         <version>3.1.0</version>
         <executions>
@@ -66,7 +70,7 @@
             </configuration>
           </execution>
         </executions>
-      </plugin>
+    </plugin>
 		<plugin>
 		  <groupId>org.apache.maven.plugins</groupId>
 		  <artifactId>maven-assembly-plugin</artifactId>
@@ -87,7 +91,64 @@
 		    </execution>
 		  </executions>
 		</plugin>
-	</plugins>
+    <plugin>
+      <groupId>org.codehaus.gmaven</groupId>
+      <artifactId>groovy-maven-plugin</artifactId>
+      <version>2.1.1</version>
+      <dependencies>
+        <dependency>
+          <groupId>commons-codec</groupId>
+          <artifactId>commons-codec</artifactId>
+          <version>1.15</version>
+        </dependency>
+      </dependencies>
+      <executions>
+        <execution>
+          <phase>install</phase>
+          <goals>
+            <goal>execute</goal>
+          </goals>
+          <configuration>
+            <source>
+              import org.apache.commons.codec.digest.DigestUtils
+              def basedir = project.basedir.absolutePath.replace('\\','/')
+              def is=new File(basedir+"/target/${project.build.finalName}-ssm.zip").newInputStream()
+              def hash=org.apache.commons.codec.digest.DigestUtils.sha256Hex(is)
+              project.properties.hash=hash
+            </source>
+          </configuration>
+        </execution>
+      </executions>
+    </plugin>	
+    <plugin>
+    	<groupId>com.google.code.maven-replacer-plugin</groupId>
+    	<artifactId>replacer</artifactId>
+	    <version>${replacer.version}</version>
+    	<executions>
+		    <execution>
+		      <id>sha256</id>
+	  		  <phase>install</phase>
+    			<goals>
+		  	  	<goal>replace</goal>
+		    	</goals>
+	        <configuration>
+   		  	 <file>${basedir}/cfn/SSM-CertAuth.template</file>
+     		   <outputFile>target/${template.file}</outputFile>
+  	     	 <replacements>
+        			<replacement>
+			    	   <token>@SHA256@</token>
+		  	  	   <value>${hash}</value>
+  	  	    	</replacement>
+        			<replacement>
+			    	   <token>@ARTIFACT@</token>
+		  	  	   <value>${project.build.finalName}-ssm.zip</value>
+  	  	    	</replacement>
+        		</replacements>
+      	  </configuration>
+  	  	</execution>
+    	</executions>
+    </plugin>
+    </plugins>
   </build>
   <distributionManagement>
     <repository>
