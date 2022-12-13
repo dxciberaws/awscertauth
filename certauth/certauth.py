@@ -345,22 +345,40 @@ class SsmCache(object):
         self.key_id=key_id
         self.ssm = boto3.client('ssm')
         self.modified = False
+
+    def join_pem(self, cert, key):
+        key = key if not key.endswith('\n') else key[:-1]
+        cert = cert if not cert.endswith('\n') else cert[:-1]
+        return(key+'\n'+cert)        
+
+    def split_pem(self, pem_str):
+        key = pem_str.split('-----BEGIN CERTIFICATE-----')[0]
+        key = key if not key.endswith('\n') else key[:-1]
+        cert = pem_str.split('-----END PRIVATE KEY-----')[1]
+        cert = cert if not cert.endswith('\n') else cert[:-1]
+        return cert, key
                 
     def __setitem__(self,host,cert_string):        
         with self._lock:
             name = f'{self.param_prefix}{host}'
+            cert,key = self.split_pem(cert_string.decode('utf-8'))
             if self.key_id:
-              self.ssm.put_parameter(Name=name,Value=cert_string.decode('utf-8'),Type='SecureString',KeyId=self.key_id, Overwrite=True)
+                self.ssm.put_parameter(Name=f'{name}/PrivateKey',Value=key,Type='SecureString',KeyId=self.key_id, Overwrite=True)
+                self.ssm.put_parameter(Name=f'{name}/Certificate',Value=cert,Type='String',KeyId=self.key_id, Overwrite=True)
             else:
-              self.ssm.put_parameter(Name=name,Value=cert_string.decode('utf-8'),Type='SecureString',Overwrite=True)
+                self.ssm.put_parameter(Name=f'{name}/PrivateKey',Value=key,Type='SecureString',Overwrite=True)
+                self.ssm.put_parameter(Name=f'{name}/Certificate',Value=cert,Type='String',Overwrite=True)
             self.modified = True
     
     def get(self, host):
             name = f'{self.param_prefix}{host}'
             try:
-                value = self.ssm.get_parameter(Name=name,WithDecryption=True)['Parameter']['Value']
-                bytes = value.encode()
-                return bytes
+                key = self.ssm.get_parameter(Name=f'{name}/PrivateKey',WithDecryption=True)['Parameter']['Value']
+                key = key.encode()
+                cert = self.ssm.get_parameter(Name=f'{name}/Certificate')['Parameter']['Value']
+                cert = cert.encode()
+                cert_str = self.join_pem(buff, cert, key)
+                return cert_str
             except Exception as e:
                 if 'ParameterNotFound' in str(e):
                     return(None)
