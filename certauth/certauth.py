@@ -19,6 +19,8 @@ import threading
 
 import boto3
 import shlex
+import string
+import re
 
 # =================================================================
 # Valid for 3 years from now
@@ -125,7 +127,7 @@ class CertificateAuthority(object):
 
         return host
 
-    def load_cert(self, host, overwrite=False,
+    def load_cert(self, cn, overwrite=False,
                               wildcard=False,
                               wildcard_use_parent=False,
                               include_cache_key=False,
@@ -133,34 +135,39 @@ class CertificateAuthority(object):
                               cert_fqdns=set(),
                               server=True):
 
-        is_ip = self.is_host_ip(host)
+        if server:
+            is_ip = self.is_host_ip(cn)
+  
+            if is_ip:
+                wildcard = False
 
-        if is_ip:
-            wildcard = False
+            if wildcard and wildcard_use_parent:
+                cn = self.get_wildcard_domain(cn)
 
-        if wildcard and wildcard_use_parent:
-            host = self.get_wildcard_domain(host)
-
-        cert_ips = list(cert_ips)  # set to ordered list
+            cert_ips = list(cert_ips)  # set to ordered list
 
         cert_str = None
 
         if not overwrite:
-            cert_str = self.cert_cache.get(host)
+            cert_str = self.cert_cache.get(cn)
 
         # if cached, just read pem
         if cert_str:
             cert, key = self.read_pem(BytesIO(cert_str))
         else:
+            if server:
             # if not cached, generate new root or host cert
-            cert, key = self.generate_cert(host,
+                cert, key = self.generate_host_cert(cn,
                                                 self.ca_cert,
                                                 self.ca_key,
                                                 wildcard,
                                                 is_ip=is_ip,
                                                 cert_ips=cert_ips,
-                                                cert_fqdns=cert_fqdns,
-                                                server=server)
+                                                cert_fqdns=cert_fqdns)
+            else:
+                cert, key = self.generate_client_cert(cn,
+                                                self.ca_cert,
+                                                self.ca_key)
                 
 
             # Write cert + key
@@ -169,15 +176,14 @@ class CertificateAuthority(object):
             cert_str = buff.getvalue()
 
             # store cert in cache
-            self.cert_cache[host] = cert_str
+            self.cert_cache[cn] = cert_str
 
         if not include_cache_key:
             return cert, key
-
         else:
-            cache_key = host
-            if hasattr(self.cert_cache, 'key_for_host'):
-                cache_key = self.cert_cache.key_for_host(host)
+            cache_key = cn
+            if hasattr(self.cert_cache, 'key_for_cn'):
+                cache_key = self.cert_cache.key_for_cn(cn)
 
             return cert, key, cache_key
 
@@ -253,13 +259,12 @@ class CertificateAuthority(object):
 
         return cert, key
 
-    def generate_cert(self, host, root_cert, root_key,
+    def generate_host_cert(self, host, root_cert, root_key,
                            wildcard=False,
                            hash_func=DEF_HASH_FUNC,
                            is_ip=False,
                            cert_ips=set(),
-                           cert_fqdns=set(),
-                           server=True):
+                           cert_fqdns=set()):
 
         utf8_host = host.encode('utf-8')
 
@@ -293,39 +298,43 @@ class CertificateAuthority(object):
         san_hosts = ', '.join(all_hosts)
         san_hosts = san_hosts.encode('utf-8')
 
-        if server:
-            cert.add_extensions([
-                crypto.X509Extension(b"extendedKeyUsage", True, b"serverAuth"),
-            ])
-            cert.add_extensions([
-                crypto.X509Extension(b'subjectAltName',
-                                     False,
-                                    san_hosts)])
-        else:
-            cert.add_extensions([
-                crypto.X509Extension(b"extendedKeyUsage", True, b"clientAuth"),
-            ])
+        cert.add_extensions([
+            crypto.X509Extension(b"extendedKeyUsage", True, b"serverAuth"),
+        ])
+        cert.add_extensions([
+            crypto.X509Extension(b'subjectAltName',
+                                 False,
+                                 san_hosts)])
         cert.sign(root_key, hash_func)
         return cert, key
 
-    def generate_host_cert(self, host, root_cert, root_key,
-                           wildcard=False,
-                           hash_func=DEF_HASH_FUNC,
-                           is_ip=False,
-                           cert_ips=set(),
-                           cert_fqdns=set(),
-                           server=True):
-        return self.generate_cert(host,root_cert,root_key,wildcard,hash_func,is_ip,cert_ips,cert_fqdns,True)
+    def generate_client_cert(self, cn, root_cert, root_key,
+                           hash_func=DEF_HASH_FUNC):
 
-    def generate_client_cert(self, host, root_cert, root_key,
-                           wildcard=False,
-                           hash_func=DEF_HASH_FUNC,
-                           is_ip=False,
-                           cert_ips=set(),
-                           cert_fqdns=set(),
-                           server=True):
-        return self.generate_cert(host,root_cert,root_key,wildcard,hash_func,is_ip,cert_ips,cert_fqdns,False)
-    
+        utf8_cn = cn.encode('utf-8')
+
+        # Generate key
+        key = crypto.PKey()
+        key.generate_key(crypto.TYPE_RSA, 2048)
+
+        # Generate CSR
+        req = crypto.X509Req()
+        req.get_subject().CN = utf8_cn
+        req.set_pubkey(key)
+        req.sign(key, hash_func)
+
+        # Generate Cert
+        cert = self._make_cert(utf8_cn)
+
+        cert.set_issuer(root_cert.get_subject())
+        cert.set_pubkey(req.get_pubkey())
+
+        cert.add_extensions([
+            crypto.X509Extension(b"extendedKeyUsage", True, b"clientAuth"),
+        ])
+        cert.sign(root_key, hash_func)
+        return cert, key
+
     def write_pem(self, buff, cert, key):
         buff.write(crypto.dump_privatekey(FILETYPE_PEM, key))
         buff.write(crypto.dump_certificate(FILETYPE_PEM, cert))
@@ -336,7 +345,6 @@ class CertificateAuthority(object):
         key = crypto.load_privatekey(FILETYPE_PEM, buff.read())
         return cert, key
 
-
 # =================================================================
 class SsmCache(object):
     def __init__(self, param_prefix,key_id=None):
@@ -346,6 +354,11 @@ class SsmCache(object):
         self.key_id=key_id
         self.ssm = boto3.client('ssm')
         self.modified = False
+
+    def key_for_cn(self, cn):
+        chars = re.escape(re.sub(r'[-_/]','',string.punctuation))
+        sanitized_cn = re.sub(r'['+chars+']', '-',my_str)
+        return f'{self.param_prefix}{sanitized_cn}/'
 
     def join_pem(self, cert, key):
         key = key if not key.endswith('\n') else key[:-1]
@@ -359,24 +372,24 @@ class SsmCache(object):
         cert = cert if not cert.endswith('\n') else cert[:-1]
         return cert, key
                 
-    def __setitem__(self,host,cert_string):        
+    def __setitem__(self,cn,cert_string):        
         with self._lock:
-            name = f'{self.param_prefix}{host}'
+            name = self.key_for_cn(cn)
             cert,key = self.split_pem(cert_string.decode('utf-8'))
             if self.key_id:
-                self.ssm.put_parameter(Name=f'{name}/PrivateKey',Value=key,Type='SecureString',KeyId=self.key_id, Overwrite=True)
-                self.ssm.put_parameter(Name=f'{name}/Certificate',Value=cert,Type='String',KeyId=self.key_id, Overwrite=True)
+                self.ssm.put_parameter(Name=f'{name}PrivateKey',Value=key,Type='SecureString',KeyId=self.key_id, Overwrite=True)
+                self.ssm.put_parameter(Name=f'{name}Certificate',Value=cert,Type='String',KeyId=self.key_id, Overwrite=True)
             else:
-                self.ssm.put_parameter(Name=f'{name}/PrivateKey',Value=key,Type='SecureString',Overwrite=True)
-                self.ssm.put_parameter(Name=f'{name}/Certificate',Value=cert,Type='String',Overwrite=True)
+                self.ssm.put_parameter(Name=f'{name}PrivateKey',Value=key,Type='SecureString',Overwrite=True)
+                self.ssm.put_parameter(Name=f'{name}Certificate',Value=cert,Type='String',Overwrite=True)
             self.modified = True
     
-    def get(self, host):
-            name = f'{self.param_prefix}{host}'
+    def get(self, cn):
+            name = self.key_for_cn(cn)
             try:
-                key = self.ssm.get_parameter(Name=f'{name}/PrivateKey',WithDecryption=True)['Parameter']['Value']
+                key = self.ssm.get_parameter(Name=f'{name}PrivateKey',WithDecryption=True)['Parameter']['Value']
                 key = key.encode()
-                cert = self.ssm.get_parameter(Name=f'{name}/Certificate')['Parameter']['Value']
+                cert = self.ssm.get_parameter(Name=f'{name}Certificate')['Parameter']['Value']
                 cert = cert.encode()
                 cert_str = self.join_pem(buff, cert, key)
                 return cert_str
@@ -396,19 +409,19 @@ class FileCache(object):
         if self.certs_dir and not os.path.exists(self.certs_dir):
             os.makedirs(self.certs_dir)
 
-    def key_for_host(self, host):
-        host = host.replace(':', '-')
-        return os.path.join(self.certs_dir, host) + '.pem'
+    def key_for_cn(self, cn):
+        cn = cn.replace(':', '-')
+        return os.path.join(self.certs_dir, cn) + '.pem'
 
-    def __setitem__(self, host, cert_string):
-        filename = self.key_for_host(host)
+    def __setitem__(self, cn, cert_string):
+        filename = self.key_for_host(cn)
         with self._lock:
             with open(filename, 'wb') as fh:
                 fh.write(cert_string)
                 self.modified = True
 
-    def get(self, host):
-        filename = self.key_for_host(host)
+    def get(self, cn):
+        filename = self.key_for_host(cn)
         try:
             with open(filename, 'rb') as fh:
                 return fh.read()
@@ -423,7 +436,7 @@ class RootCACache(FileCache):
         ca_dir = os.path.dirname(ca_file) or '.'
         super(RootCACache, self).__init__(ca_dir)
 
-    def key_for_host(self, host=None):
+    def key_for_cn(self, cn=None):
         return self.ca_file
 
 
@@ -529,17 +542,15 @@ def main(args=None):
 
     if hostname:
         certName = hostname
-        server = True
-    else:
-        certName = clientname
-        server = False
-        
-    ca.load_cert(certName, overwrite=overwrite,
+        ca.load_cert(certName, overwrite=overwrite,
                            wildcard=wildcard,
                            wildcard_use_parent=False,
                            cert_ips=cert_ips,
-                           cert_fqdns=cert_fqdns,
-                           server=server)
+                           cert_fqdns=cert_fqdns)
+    else:
+        certName = clientname
+        ca.load_cert(certName, overwrite=overwrite)
+        
 
     if cert_cache.modified:
         print('Created new cert "' + certName +
