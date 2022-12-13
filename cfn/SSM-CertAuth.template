@@ -1,5 +1,5 @@
 {
-  "Description" : "(0.0.1) SSM Backed Certificate Authority",
+  "Description" : "(0.0.1) SSM Backed Certificate Authority. Based on https://github.com/ikreymer/certauth",
   "Mappings" : {
     "Constants": {
       "ProjectName": {"Value":"SSM-CA","LowCaseValue":"ssm-ca"},
@@ -57,10 +57,10 @@
                   "Resource":"*"
                 },
                 {
-                  "Sid":"SnsManagement",
+                  "Sid":"AcmManagement",
                   "Effect":"Allow",
                   "Action": [
-                    "sns:*"
+                    "acm:*"
                   ],
                   "Resource":"*"
                 },
@@ -105,8 +105,7 @@
             },
             "CommonName": {
               "type": "String"
-            },
-            ""
+            }
           },
           "mainSteps": [
             {
