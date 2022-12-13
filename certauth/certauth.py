@@ -18,6 +18,7 @@ from collections import OrderedDict
 import threading
 
 import boto3
+import shlex
 
 # =================================================================
 # Valid for 3 years from now
@@ -437,6 +438,10 @@ class LRUCache(OrderedDict):
         if len(self) > self.max_size:
             self.popitem(last=False)
 
+def handler(event,context):
+    args = 'certauth.py '+event['args']
+    args.append(shlex.split(args))
+    main(args)
 
 # =================================================================
 def main(args=None):
