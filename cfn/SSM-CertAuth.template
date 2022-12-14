@@ -107,7 +107,8 @@
           "assumeRole": {"Fn::GetAtt":"SsmAutomationRole.Arn"},
           "parameters": {
             "CaName": {
-              "type":"String"
+              "type":"String",
+              "allowedPattern":"[0-9,a-z,A-Z]{3,24}"
             },
             "CommonName": {
               "type": "String"
@@ -159,7 +160,7 @@
                   "      raise Exception(f'Certificate Authority {prefix}{ca_name} already exists. Set Overwrite to true to overwrite')\n",
                   "  else:\n",
                   "    exists = False\n",
-                  "  args = f'{ca_name} -c \"{common_name}\" -s \"{prefix}\" ' + ('-f' if (exists and overwrite) else '')\n",
+                  "  args = f'{prefix}{ca_name} -c \"{common_name}\" -s ' + ('-f' if (exists and overwrite) else '')\n",
                   "  return {'Args': args}\n"
                 ]]}
               },
@@ -176,7 +177,7 @@
               "action":"aws:executeScript",
               "onFailure":"Abort",
               "inputs": {
-                "Runtime": "python3.8",
+                "Runtime": "python3.7",
                 "Handler": "certauth.handler",
                 "InputPayload": {
                   "args":"{{CheckIfCaExists.Args}}"
@@ -279,7 +280,7 @@
                   "  ips = events['IPs'].strip()\n",
                   "  ips = f'--cert_ips \"{ips}\"' if len(ips)>0 else ''\n",
                   "  wildcard = '--wildcard_cert' if event['Wildcard'].lower() == 'true' else ''\n",
-                  "  args = f'{ca_name} -s \"{prefix}\" -n {common_name}'+ f' {fqdns} {ips} {wildcard} ' + ('-f' if overwrite and  else '')\n",
+                  "  args = f'{prefix}{ca_name} -s -n {common_name}'+ f' {fqdns} {ips} {wildcard} ' + ('-f' if overwrite and  else '')\n",
                   "  return {'Args': args}\n"
                 ]]}
               },
@@ -296,7 +297,7 @@
               "action":"aws:executeScript",
               "onFailure":"Abort",
               "inputs": {
-                "Runtime": "python3.8",
+                "Runtime": "python3.7",
                 "Handler": "certauth.handler",
                 "InputPayload": {
                   "args":"{{CheckIfCaExists.Args}}"
