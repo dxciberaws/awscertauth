@@ -30,8 +30,8 @@ CERT_NOT_AFTER = 3 * 365 * 24 * 60 * 60
 
 CERTS_DIR = './ca/certs/'
 
-CERT_NAME = 'certauth sample CA'
-SSM_PREFIX = '/SSM-CA/'
+CERT_NAME = 'DXC AWS LZ CA'
+SSM_PREFIX = '/CA/'
 
 DEF_HASH_FUNC = 'sha256'
 
@@ -357,13 +357,13 @@ class SsmCache(object):
 
     def key_for_cn(self, cn):
         chars = re.escape(re.sub(r'[-_/]','',string.punctuation))
-        sanitized_cn = re.sub(r'['+chars+']', '-',my_str)
+        sanitized_cn = re.sub(r'['+chars+']', '-',cn)
         return f'{self.param_prefix}{sanitized_cn}/'
 
     def join_pem(self, cert, key):
-        key = key if not key.endswith('\n') else key[:-1]
-        cert = cert if not cert.endswith('\n') else cert[:-1]
-        return(key+'\n'+cert)        
+        key = key if not key.endswith(b'\n') else key[:-1]
+        cert = cert if not cert.endswith(b'\n') else cert[:-1]
+        return(key+b'\n'+cert)        
 
     def split_pem(self, pem_str):
         key = pem_str.split('-----BEGIN CERTIFICATE-----')[0]
@@ -386,12 +386,13 @@ class SsmCache(object):
     
     def get(self, cn):
             name = self.key_for_cn(cn)
+            print(name)
             try:
                 key = self.ssm.get_parameter(Name=f'{name}PrivateKey',WithDecryption=True)['Parameter']['Value']
                 key = key.encode()
                 cert = self.ssm.get_parameter(Name=f'{name}Certificate')['Parameter']['Value']
                 cert = cert.encode()
-                cert_str = self.join_pem(buff, cert, key)
+                cert_str = self.join_pem(cert, key)
                 return cert_str
             except Exception as e:
                 if 'ParameterNotFound' in str(e):
@@ -463,8 +464,8 @@ def main(args=None):
     parser.add_argument('root_ca_cert',
                         help='Path to existing or new root CA file')
 
-    parser.add_argument('-s', '--ssm-prefix', action='store', default=SSM_PREFIX,
-                        help='Use AWS SSM to store certificates under given prefix')
+    parser.add_argument('-s', '--ssm', action='store_true', 
+                        help='Use AWS SSM to store certificates under prefix given by the path argument')
 
     parser.add_argument('-c', '--certname', action='store', default=CERT_NAME,
                         help='Name for root certificate')
@@ -513,15 +514,15 @@ def main(args=None):
     else:
         overwrite = False
 
-    ssm_prefix = r.ssm_prefix
-
-    if not ssm_prefix:    
+    if not r.ssm:    
       cert_cache = FileCache(certs_dir)
       ca_file_cache = RootCACache(root_cert)
     else:
-      cert_cache = SsmCache(ssm_prefix)
-      ca_file_cache = SsmCache(ssm_prefix)
+      print('Using SSM')
+      cert_cache = SsmCache(root_cert)
+      ca_file_cache = SsmCache(root_cert)
 
+    print(r.certname)
     ca = CertificateAuthority(ca_name=r.certname,
                               ca_file_cache=ca_file_cache,
                               cert_cache=cert_cache,
@@ -546,10 +547,12 @@ def main(args=None):
                            wildcard=wildcard,
                            wildcard_use_parent=False,
                            cert_ips=cert_ips,
-                           cert_fqdns=cert_fqdns)
+                           cert_fqdns=cert_fqdns,
+                           server=True)
     else:
+        print(f'Client cert for {clientname}')
         certName = clientname
-        ca.load_cert(certName, overwrite=overwrite)
+        ca.load_cert(certName, overwrite=overwrite, server=False)
         
 
     if cert_cache.modified:
