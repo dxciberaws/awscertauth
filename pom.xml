@@ -71,7 +71,37 @@
           </execution>
         </executions>
     </plugin>
-		<plugin>
+    <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.1.0</version>
+        <executions>
+          <execution>
+            <id>install-requirements</id>
+            <phase>compile</phase>
+            <goals>
+              <goal>exec</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <executable>docker</executable>
+          <!-- optional -->
+          <workingDirectory>${basedir}</workingDirectory>
+          <arguments>
+            <argument>run</argument>
+            <argument>-v</argument>
+            <argument>${basedir}:/var/task</argument>
+            <argument>&quot;lambci/lambda:build-python3.7&quot;</argument>
+            <argument>/bin/sh</argument>
+            <argument>-c</argument>
+            <argument>&quot;pip install -r requirements.txt -t lib &amp;&amp; exit&quot;</argument>
+          </arguments>
+          <environmentVariables>
+          </environmentVariables>
+        </configuration>
+    </plugin>
+    <plugin>
 		  <groupId>org.apache.maven.plugins</groupId>
 		  <artifactId>maven-assembly-plugin</artifactId>
 		  <version>3.1.0</version>
