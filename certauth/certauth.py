@@ -453,8 +453,10 @@ class LRUCache(OrderedDict):
             self.popitem(last=False)
 
 def handler(event,context):
-    args = 'certauth.py '+event['args']
-    args.append(shlex.split(args))
+    args_str = event['args']
+    print(args_str)
+    print(f'Invoked as: {args_str}')
+    args = shlex.split(args_str)
     main(args)
 
 # =================================================================
@@ -568,4 +570,5 @@ def main(args=None):
 
 
 if __name__ == "__main__":  #pragma: no cover
+#    handler({"args":"ClientVPN -c \"DXC LZ SBX Client VPN CA\" -s "},None)
     main()
