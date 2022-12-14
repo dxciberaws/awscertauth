@@ -93,6 +93,7 @@
         "Attachments":[
            {
             "Key":"S3FileUrl",
+            "Name":"@ARTIFACT@",
             "Values":[{"Fn::Sub":"${TemplatesS3Url}/@ARTIFACT@"}]
            }
         ],
@@ -116,12 +117,13 @@
               "default": {"Fn::Sub":"${ParametersPrefix}"}
             },
             "Overwrite": {
-              "type": "Boolean",
-              "default": "false"
+              "type": "String",
+              "default": "false",
+              "allowedValues": ["true","false"]
             }
           },
           "files":{
-            "ssm-certaut-0.0.1-SNAPSHOT-ssm.zip": {
+            "@ARTIFACT@": {
               "checksums":{
                 "sha256":"@SHA256@"
               }
@@ -175,11 +177,11 @@
               "onFailure":"Abort",
               "inputs": {
                 "Runtime": "python3.8",
-                "Handler": "certauth.py.handler",
+                "Handler": "certauth.handler",
                 "InputPayload": {
                   "args":"{{CheckIfCaExists.Args}}"
                 },
-                "Attachment":"ssm-certaut-0.0.1-SNAPSHOT-ssm.zip"
+                "Attachment":"@ARTIFACT@"
               }
             }
           ]
@@ -192,8 +194,9 @@
         "DocumentType" : "Automation",
         "Attachments":[
            {
+            "Name":"@ARTIFACT@",
             "Key":"S3FileUrl",
-            "Values":[{"Fn::Sub":"${TemplatesS3Url}/target/ssm-certauth-0.0.1-SNAPSHOT-ssm.zip"}]
+            "Values":[{"Fn::Sub":"${TemplatesS3Url}/@ARTIFACT@"}]
            }
         ],
         "Tags" : [
@@ -227,14 +230,15 @@
               "default": {"Fn::Sub":"${ParametersPrefix}"}
             },
             "Overwrite": {
-              "type": "Boolean",
-              "default": "false"
+              "type": "String",
+              "default": "false",
+              "allowedValues": ["true","false"]
             }
           },
           "files":{
-            "ssm-certaut-0.0.1-SNAPSHOT-ssm.zip": {
+            "ssm-certauth-0.0.1-SNAPSHOT-ssm.zip": {
               "checksums":{
-                "sha256":"833e6ed821398dc49b78e3b05605f5a43cec58d9a3111e315686fce07823cb67"
+                "sha256":"@SHA256@"
               }
             }
           },
@@ -293,11 +297,11 @@
               "onFailure":"Abort",
               "inputs": {
                 "Runtime": "python3.8",
-                "Handler": "certauth.py.handler",
+                "Handler": "certauth.handler",
                 "InputPayload": {
                   "args":"{{CheckIfCaExists.Args}}"
                 },
-                "Attachment":"ssm-certaut-0.0.1-SNAPSHOT-ssm.zip"
+                "Attachment":"@ARTIFACT@"
               }
             }
           ]
