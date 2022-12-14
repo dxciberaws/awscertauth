@@ -1,4 +1,3 @@
 boto3 >= 1.26.27
-pyopenssl >= 22.1.0
-tldextract
 pyopenssl
+tldextract
