@@ -149,7 +149,7 @@ CLI Usage Examples
 
 ::
 
-  usage: certauth [-h] [-c CERTNAME] [-n HOSTNAME] [-d CERTS_DIR] [-f] [-w]
+  usage: certauth [-h] [-c CERTNAME] [-n HOSTNAME] [-d CERTS_DIR] [-w] [-I IP_LIST] [-D FQDN_LIST] [-l CLIENT_NAME] [-s] [-f]
                 root_ca_cert
 
   positional arguments:
@@ -161,14 +161,19 @@ CLI Usage Examples
                         Name for root certificate
     -n HOSTNAME, --hostname HOSTNAME
                         Hostname certificate to create
+    -w, --wildcard_cert   
+                        Add wildcard SAN to host: *.<host>, <host>. Ignored if '-l' is present and '-n' is not
+    -I, --cert_ips IP_LIST
+                        Adds the IPS given in the comma separated argument. '-w' is ignored. Only used with '-n'
+    -D, --cert_fqdns FQDN_LIST
+                        Adds the FQDN names in the comma separated argument. Only used with '-n'
     -l CLIENT_NAME --clientname CLIENT_NAME
-                        Name of the client certificate to create
-    -s SSM_PREFIX --ssm_prefix SSM_PREFIX
-                        Prefix of the SSM parameters created. It is added a heading and trailing '/' if not present
+                        Name of the client certificate to create. Ignored if '-n' is present
+    -s --ssm
+                        Use AWS SSM Parameter store as certificate store, under prefix given by 'root_ca_cert'
     -d CERTS_DIR, --certs-dir CERTS_DIR
-                        Directory for host certificates
+                        Directory for host certificates. Ignored if '-s' is present
     -f, --force           Overwrite certificates if they already exist
-    -w, --wildcard_cert   add wildcard SAN to host: *.<host>, <host>
 
 To create a new root CA certificate:
 
@@ -190,10 +195,14 @@ To create a client certificate
 
 ``certauth myrootca.pem --clientname "example" -d ./certs_dir``
 
+To create a CA in AWS SSM:
+
+``certauth /CA/MyRootCA -c "MY Test CA"``
+
 To create certificates in AWS SSM:
 
-``certauth myrootca.pem -s MyRootCA --clientname "example"``
-``certauth myrootca.pem --ssm_prefix MyRootCA --hostname "example.com"``
+``certauth /CA/MyRootCA -s --clientname jalvarezferr@dxc.com``
+``certauth /CA/MyRootCA --ssm_prefix MyRootCA --hostname "example.com"``
 
 History
 =======
