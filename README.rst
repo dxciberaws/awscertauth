@@ -4,6 +4,8 @@ DXC Iberia Extensions
 DXC Iberia has extended certauth to a new use case where certificates are stored in AWS SSM Parameter Store,
 and to be able to generate client certificates too.
 
+Certificate revocation and CRL generation are added too
+
 Certificate Authority Certificate Maker Tools
 =============================================
 
@@ -141,6 +143,19 @@ params of ``load_cert``:
 This will generate a cert for ``example.com`` with ``example.org`` and ``192.168.1.1`` in
 the SAN.
 
+Certificate Revocation
+~~~~~~~~~~~~~~~~~~~~~~
+
+Certificates can be revocated with the -r option combined with -l for client certificates or -n for server certificates
+Revocated certificates are relocated to a different location in the cache. Teh CRL generation retrieves all certificates
+in the revocated location and generates a CRL signed by the CA with 'next_update' set by default to 24 hours later. Common
+use of 'next_update' by CRL consumers is that the CRL is considered invalid an needs to be reloaded after the said date.
+
+The CRL is generated using the -R option followed to the file or S3 URI where the CRL file is stored. Storing the CRL as 
+an AWS SSM parameter is not supported as CRL size can easily exceed the 8KB limit of AWS SSM parameters.
+
+A certificate can be un-revoked my relocating it in the original location but this operation is not provided by this application
+and must be done manually. In case a certificate is un-revoked and was included in a CRL, any published CRL must be updated.
 
 CLI Usage Examples
 ==================
@@ -149,8 +164,8 @@ CLI Usage Examples
 
 ::
 
-  usage: certauth [-h] [-c CERTNAME] [-n HOSTNAME] [-d CERTS_DIR] [-w] [-I IP_LIST] [-D FQDN_LIST] [-l CLIENT_NAME] [-s] [-f]
-                root_ca_cert
+  usage: certauth [-h] [-c CERTNAME] [-n HOSTNAME] [-d CERTS_DIR] [-w] [-I IP_LIST] [-D FQDN_LIST] [-l CLIENT_NAME] [-s] [-f] [-r] [-R REVOCATION_LIST]
+                
 
   positional arguments:
     root_ca_cert          Path to existing or new root CA file
@@ -174,6 +189,11 @@ CLI Usage Examples
     -d CERTS_DIR, --certs-dir CERTS_DIR
                         Directory for host certificates. Ignored if '-s' is present
     -f, --force           Overwrite certificates if they already exist
+    
+    -r, --revoke
+                        Combined with -l or -n to specify the cn, revocates the indicated certificate
+    -R, --revoke_list REVOKE_LIST
+                        Generates a CRL file and stores it at `REVOKE_LIST`, that can be a local file or an S3 obejct URI
 
 To create a new root CA certificate:
 
@@ -203,6 +223,15 @@ To create certificates in AWS SSM:
 
 ``certauth /CA/MyRootCA -s --clientname jalvarezferr@dxc.com``
 ``certauth /CA/MyRootCA --ssm_prefix MyRootCA --hostname "example.com"``
+
+To revoke a certificate
+
+``certauth /CA/MyRootCA -s -l jalvarezferr@dxc.com -r``
+
+To generate a CRL stored in AWS S3:
+
+``certauth /CA/MyRootCA -s -R s3://myca-bucket/crl.pem``
+
 
 History
 =======
