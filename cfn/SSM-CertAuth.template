@@ -1,9 +1,9 @@
 {
-  "Description" : "(0.0.1) SSM Backed Certificate Authority. Based on https://github.com/ikreymer/certauth",
+  "Description" : "(0.0.2) SSM Backed Certificate Authority. Based on https://github.com/ikreymer/certauth",
   "Mappings" : {
     "Constants": {
       "ProjectName": {"Value":"SSM-CA","LowCaseValue":"ssm-ca"},
-      "Version": {"Value":"0-0-1"}
+      "Version": {"Value":"0-0-2"}
     }
   },
   "Parameters" : {
