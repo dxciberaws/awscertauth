@@ -21,6 +21,7 @@ import boto3
 import shlex
 import string
 import re
+import datetime
 
 # =================================================================
 # Valid for 3 years from now
@@ -335,6 +336,20 @@ class CertificateAuthority(object):
         cert.sign(root_key, hash_func)
         return cert, key
 
+    def generate_crl(self,hash_func=DEF_HASH_FUNC):
+        issuerCert = self.ca_cert
+        issuerKey = self.ca_key
+        digest='sha256'
+        revokedList = self.cert_cache.get_revoked_list()
+        crl = crypto.CRL()
+        now = datetime.datetime.now()
+        crl.set_lastUpdate(now.strftime('%Y%m%d%H%M%SZ').encode('utf-8'))
+        crl.set_nextUpdate((now + datetime.timedelta(days=1)).strftime('%Y%m%d%H%M%SZ').encode('utf-8'))
+        for revoked in revokedList:
+            crl.add_revoked(revoked)
+        crl.sign(issuerCert, issuerKey, hash_func.encode('utf8'))
+        return crl
+    
     def write_pem(self, buff, cert, key):
         buff.write(crypto.dump_privatekey(FILETYPE_PEM, key))
         buff.write(crypto.dump_certificate(FILETYPE_PEM, cert))
@@ -345,6 +360,17 @@ class CertificateAuthority(object):
         key = crypto.load_privatekey(FILETYPE_PEM, buff.read())
         return cert, key
 
+    def revoke_cert(self,cn):
+        cert_string = self.cert_cache.get(cn)
+        cert = self.cert_cache.revoke(cn,cert_string)
+        
+    def get_revoked(cert_str,revoked_date):
+        cert = crypto.load_certificate(FILETYPE_PEM, cert_str.encode('utf-8'))
+        revoked = crypto.Revoked()
+        revoked.set_serial(('%x' % cert.get_serial_number()).encode('utf-8'))
+        revoked.set_rev_date(revoked_date.strftime('%Y%m%d%H%M%SZ').encode('utf-8'))
+        return revoked
+    
 # =================================================================
 class SsmCache(object):
     def __init__(self, param_prefix,key_id=None):
@@ -356,9 +382,25 @@ class SsmCache(object):
         self.modified = False
 
     def key_for_cn(self, cn):
-        chars = re.escape(re.sub(r'[-_/]','',string.punctuation))
-        sanitized_cn = re.sub(r'['+chars+']', '-',cn)
-        return f'{self.param_prefix}{sanitized_cn}/'
+        chars = re.escape(re.sub(r'[-_/.]','',string.punctuation))
+        sanitized_key = re.sub(r'['+chars+']', '-',f'{self.param_prefix}{cn}/')
+        return sanitized_key
+
+    def revoked_key_for_cn(self, cn,timestamp=None):
+        chars = re.escape(re.sub(r'[-_/.]','',string.punctuation))
+        if not timestamp:
+            timestamp = str(datetime.datetime.now().timestamp())
+        sanitized_key = re.sub(r'['+chars+']', '-',f'{self.param_prefix}revoked/{timestamp}/{cn}/')
+        return sanitized_key
+    
+    def revoked_date_for_key(self,key):
+        match = re.match('.*/revoked/(.*?)/(.*?)/.*',key)
+        if match:
+            timestamp = match.group(1)
+            cn = match.group(2)
+            return timestamp,cn
+        else:
+            raise Exception(f'Key {key} format not recognized')
 
     def join_pem(self, cert, key):
         key = key if not key.endswith(b'\n') else key[:-1]
@@ -399,7 +441,58 @@ class SsmCache(object):
                     return(None)
                 else:
                     raise(e)
-            
+
+    def get_revoked(self, cn,timestamp_str):
+            name = self.revoked_key_for_cn(cn,timestamp_str)
+            print(name)
+            try:
+                key = self.ssm.get_parameter(Name=f'{name}PrivateKey',WithDecryption=True)['Parameter']['Value']
+                key = key.encode()
+                cert = self.ssm.get_parameter(Name=f'{name}Certificate')['Parameter']['Value']
+                cert = cert.encode()
+                cert_str = self.join_pem(cert, key)
+                return cert_str
+            except Exception as e:
+                if 'ParameterNotFound' in str(e):
+                    return(None)
+                else:
+                    raise(e)
+    
+    def revoke(self,cn,cert_string):
+        param = self.key_for_cn(cn)
+        print(param)
+        revoked_param = self.revoked_key_for_cn(cn)
+        print(revoked_param)
+        with self._lock:
+            cert,key = self.split_pem(cert_string.decode('utf-8'))
+            if self.key_id:
+                self.ssm.put_parameter(Name=f'{revoked_param}PrivateKey',Value=key,Type='SecureString',KeyId=self.key_id, Overwrite=True)
+                self.ssm.put_parameter(Name=f'{revoked_param}Certificate',Value=cert,Type='String',KeyId=self.key_id, Overwrite=True)
+            else:
+                self.ssm.put_parameter(Name=f'{revoked_param}PrivateKey',Value=key,Type='SecureString',Overwrite=True)
+                self.ssm.put_parameter(Name=f'{revoked_param}Certificate',Value=cert,Type='String',Overwrite=True)
+            self.modified = True
+            self.ssm.delete_parameter(Name=f'{param}PrivateKey')
+            self.ssm.delete_parameter(Name=f'{param}Certificate')
+    
+    def get_revoked_list(self):
+        paginator = self.ssm.get_paginator('get_parameters_by_path')
+        prefix = self.param_prefix
+        iterator = paginator.paginate(Path=prefix,Recursive=True,WithDecryption=True)
+        revoked_list = []
+        for page in iterator:
+            parameters = page['Parameters']
+            for p in parameters:
+                name = p['Name']
+                if name.endswith('Certificate') and 'root_ca' not in name:
+                    timestamp_str,cn=self.revoked_date_for_key(name)
+                    revoked_date=datetime.datetime.fromtimestamp(float(timestamp_str))
+                    print('CN:'+cn)
+                    cert,key = self.split_pem(self.get_revoked(cn,timestamp_str).decode('utf-8'))
+                    revoked = CertificateAuthority.get_revoked(cert, revoked_date)
+                    revoked_list.append(revoked)
+        return revoked_list
+
 # =================================================================
 class FileCache(object):
     def __init__(self, certs_dir):
@@ -413,6 +506,11 @@ class FileCache(object):
     def key_for_cn(self, cn):
         cn = cn.replace(':', '-')
         return os.path.join(self.certs_dir, cn) + '.pem'
+
+    def revoked_key_for_cn(self, cn):
+        cn = cn.replace(':', '-')
+        timestamp = str(datetime.datetime.now().timestamp() * 1000)
+        return os.path.join({self.certs_dir},'revoked',timestamp,cn) + '.pem'
 
     def __setitem__(self, cn, cert_string):
         filename = self.key_for_host(cn)
@@ -429,6 +527,15 @@ class FileCache(object):
         except:
             return b''
 
+    def revoke(self,cn):
+        cert = self.get(cn)
+        filename = self.key_for_cn(cn)
+        revoked_filename = self.revoked_key_for_cn(cn)
+        with self._lock:
+            with open(revoked_filename, 'wb') as fh:
+                fh.write(cert)
+                self.modified = True
+            os.remove(filename)
 
 # =================================================================
 class RootCACache(FileCache):
@@ -439,7 +546,6 @@ class RootCACache(FileCache):
 
     def key_for_cn(self, cn=None):
         return self.ca_file
-
 
 # =================================================================
 class LRUCache(OrderedDict):
@@ -468,6 +574,12 @@ def main(args=None):
 
     parser.add_argument('-s', '--ssm', action='store_true', 
                         help='Use AWS SSM to store certificates under prefix given by the path argument')
+
+    parser.add_argument('-r', '--revoke', action='store_true',
+                        help='Revoke the certificate give by -n or -l. Root certificate cannot be revoked')
+
+    parser.add_argument('-R', '--revoke-list', action='store',
+                        help='Generate a CRL and store it in the specified destination')
 
     parser.add_argument('-c', '--certname', action='store', default=CERT_NAME,
                         help='Name for root certificate')
@@ -524,7 +636,6 @@ def main(args=None):
       cert_cache = SsmCache(root_cert)
       ca_file_cache = SsmCache(root_cert)
 
-    print(r.certname)
     ca = CertificateAuthority(ca_name=r.certname,
                               ca_file_cache=ca_file_cache,
                               cert_cache=cert_cache,
@@ -532,6 +643,20 @@ def main(args=None):
     
     # Just creating the root cert
     if not hostname and not clientname:
+        if r.revoke_list:
+            crl = ca.generate_crl()
+            crl_pem = crypto.dump_crl(crypto.FILETYPE_PEM, crl)
+            if r.revoke_list.startswith('s3://'):
+                match = re.match('s3://(.*?)/(.*)',r.revoke_list)
+                bucket = match.group(1)
+                key = match.group(2)
+                s3 = boto3.resource('s3')
+                content = s3.Object(bucket,key).put(Body=crl_pem)
+            else:
+                with open(r.revoke_list,'wb') as f:
+                    f.write(crl_pem)
+            return 0
+            
         if ca_file_cache.modified:
             print('Created new root cert: "' + root_cert + '"')
             return 0
@@ -543,31 +668,35 @@ def main(args=None):
     # Sign a certificate for a given host
     overwrite = r.force
 
-    if hostname:
-        certName = hostname
-        ca.load_cert(certName, overwrite=overwrite,
+    if r.revoke:
+        if not hostname and not clientname:
+            print('Root cert can not be revoked. Use -r only with -n or -l')
+            return 1
+        else:
+            certName = hostname if hostname else clientname
+            ca.revoke_cert(certName)
+    else:
+        if hostname:
+            certName = hostname
+            ca.load_cert(certName, overwrite=overwrite,
                            wildcard=wildcard,
                            wildcard_use_parent=False,
                            cert_ips=cert_ips,
                            cert_fqdns=cert_fqdns,
                            server=True)
-    else:
-        print(f'Client cert for {clientname}')
-        certName = clientname
-        ca.load_cert(certName, overwrite=overwrite, server=False)
-        
+        else:
+            certName = clientname
+            ca.load_cert(certName, overwrite=overwrite, server=False)
 
-    if cert_cache.modified:
-        print('Created new cert "' + certName +
-              '" signed by root cert ' +
-              root_cert)
-        return 0
-
-    else:
-        print('Cert for "' + certName + '" already exists,' +
-              ' use -f to overwrite')
-        return 1
-
+        if cert_cache.modified:
+            print('Created new cert "' + certName +
+                  '" signed by root cert ' +
+                  root_cert)
+            return 0
+        else:
+            print('Cert for "' + certName + '" already exists,' +
+                  ' use -f to overwrite')
+            return 1
 
 if __name__ == "__main__":  #pragma: no cover
 #    handler({"args":"ClientVPN -c \"DXC LZ SBX Client VPN CA\" -s "},None)
