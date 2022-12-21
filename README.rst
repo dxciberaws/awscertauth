@@ -157,6 +157,13 @@ an AWS SSM parameter is not supported as CRL size can easily exceed the 8KB limi
 A certificate can be un-revoked my relocating it in the original location but this operation is not provided by this application
 and must be done manually. In case a certificate is un-revoked and was included in a CRL, any published CRL must be updated.
 
+AWS ACM Import
+~~~~~~~~~~~~~~
+
+With option -A a certificate that already exists, or the root_ca, is imported into AWS ACM. This is useful to use the certificates 
+in any AWS ACM integrated services, such as Client VPN, ELB, etc.
+
+
 CLI Usage Examples
 ==================
 
@@ -164,7 +171,7 @@ CLI Usage Examples
 
 ::
 
-  usage: certauth [-h] [-c CERTNAME] [-n HOSTNAME] [-d CERTS_DIR] [-w] [-I IP_LIST] [-D FQDN_LIST] [-l CLIENT_NAME] [-s] [-f] [-r] [-R REVOCATION_LIST]
+  usage: certauth [-h] [-c CERTNAME] [-n HOSTNAME] [-d CERTS_DIR] [-w] [-I IP_LIST] [-D FQDN_LIST] [-l CLIENT_NAME] [-s] [-f] [-r] [-R REVOCATION_LIST] [-A]
                 
 
   positional arguments:
@@ -194,6 +201,8 @@ CLI Usage Examples
                         Combined with -l or -n to specify the cn, revocates the indicated certificate
     -R, --revoke_list REVOKE_LIST
                         Generates a CRL file and stores it at `REVOKE_LIST`, that can be a local file or an S3 obejct URI
+    -A, --acm-import
+                        Imports the certificate with CN given by -n or -l to AWS ACM. If -n or -l is not given the root_ca is imported
 
 To create a new root CA certificate:
 
@@ -232,6 +241,9 @@ To generate a CRL stored in AWS S3:
 
 ``certauth /CA/MyRootCA -s -R s3://myca-bucket/crl.pem``
 
+To import a certificate in AWS ACM:
+
+``certauth /CA/MyRootCA -s -n server.mydomain.com -A``
 
 History
 =======

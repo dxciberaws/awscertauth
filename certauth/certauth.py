@@ -255,6 +255,7 @@ class CertificateAuthority(object):
                                  False,
                                  b"hash",
                                  subject=cert),
+
             ])
         cert.sign(key, hash_func)
 
@@ -300,6 +301,26 @@ class CertificateAuthority(object):
         san_hosts = san_hosts.encode('utf-8')
 
         cert.add_extensions([
+            crypto.X509Extension(b"basicConstraints",
+                                 False,
+                                 b"CA:FALSE, pathlen:0"),
+
+            crypto.X509Extension(b"keyUsage",
+                                 True,
+                                 b"digitalSignature,keyEncipherment"),
+
+            crypto.X509Extension(b"subjectKeyIdentifier",
+                                 False,
+                                 b"hash",
+                                 subject=cert),
+
+            crypto.X509Extension(b"authorityKeyIdentifier",
+                                 False,
+                                 b'keyid:always,issuer:always',
+                                 issuer=root_cert)
+            ])
+
+        cert.add_extensions([
             crypto.X509Extension(b"extendedKeyUsage", True, b"serverAuth"),
         ])
         cert.add_extensions([
@@ -329,6 +350,25 @@ class CertificateAuthority(object):
 
         cert.set_issuer(root_cert.get_subject())
         cert.set_pubkey(req.get_pubkey())
+
+        cert.add_extensions([
+            crypto.X509Extension(b"basicConstraints",
+                                 False,
+                                 b"CA:FALSE, pathlen:0"),
+
+            crypto.X509Extension(b"keyUsage",
+                                 True,
+                                 b"digitalSignature"),
+
+            crypto.X509Extension(b"subjectKeyIdentifier",
+                                 False,
+                                 b"hash",
+                                 subject=cert),
+            crypto.X509Extension(b"authorityKeyIdentifier",
+                                 False,
+                                 b'keyid:always,issuer:always',
+                                 issuer=root_cert)
+            ])
 
         cert.add_extensions([
             crypto.X509Extension(b"extendedKeyUsage", True, b"clientAuth"),
@@ -362,6 +402,8 @@ class CertificateAuthority(object):
 
     def revoke_cert(self,cn):
         cert_string = self.cert_cache.get(cn)
+        if not cert_string:
+            raise Exception(f'Certificate with CN={cn} does not exist')
         cert = self.cert_cache.revoke(cn,cert_string)
         
     def get_revoked(cert_str,revoked_date):
@@ -460,9 +502,7 @@ class SsmCache(object):
     
     def revoke(self,cn,cert_string):
         param = self.key_for_cn(cn)
-        print(param)
         revoked_param = self.revoked_key_for_cn(cn)
-        print(revoked_param)
         with self._lock:
             cert,key = self.split_pem(cert_string.decode('utf-8'))
             if self.key_id:
@@ -477,7 +517,7 @@ class SsmCache(object):
     
     def get_revoked_list(self):
         paginator = self.ssm.get_paginator('get_parameters_by_path')
-        prefix = self.param_prefix
+        prefix = self.param_prefix+'revoked/'
         iterator = paginator.paginate(Path=prefix,Recursive=True,WithDecryption=True)
         revoked_list = []
         for page in iterator:
@@ -604,7 +644,10 @@ def main(args=None):
 
     parser.add_argument('-D', '--cert_fqdns', action='store', default='',
                         help='add more domains to the cert\'s SAN')
-
+    
+    parser.add_argument('-A', '--acm-import', action="store_true",
+                        help='Import certificate in AWS ACM. Use with with -n or -l for client and server or without for root_ca')
+    
     r = parser.parse_args(args=args)
 
     certs_dir = r.certs_dir
@@ -640,6 +683,29 @@ def main(args=None):
                               ca_file_cache=ca_file_cache,
                               cert_cache=cert_cache,
                               overwrite=overwrite)
+
+    if r.acm_import:
+        cn = hostname or clientname or ROOT_CA
+        if cn == ROOT_CA:
+            cert_pem = ca.get_root_pem()
+        else:
+            cert_pem = cert_cache.get(cn)
+        cert,key = cert_cache.split_pem(cert_pem.decode())
+        acm = boto3.client('acm')
+        root_cert, root_key = cert_cache.split_pem(ca.get_root_pem().decode())
+        acm.import_certificate(Certificate=cert,PrivateKey=key,CertificateChain=root_cert,
+                                Tags=[
+                                      {
+                                          'Key':'ssm-ca:parameter',
+                                          'Value':cert_cache.key_for_cn(cn)
+                                      },
+                                      {
+                                          'Key':'ssm-ca:cn',
+                                          'Value':cn
+                                      }
+                                    ]
+                               )
+        return 1
     
     # Just creating the root cert
     if not hostname and not clientname:
@@ -656,7 +722,7 @@ def main(args=None):
                 with open(r.revoke_list,'wb') as f:
                     f.write(crl_pem)
             return 0
-            
+        
         if ca_file_cache.modified:
             print('Created new root cert: "' + root_cert + '"')
             return 0

@@ -1,9 +1,9 @@
 {
-  "Description" : "(0.0.2) SSM Backed Certificate Authority. Based on https://github.com/ikreymer/certauth",
+  "Description" : "(0.0.3) SSM Backed Certificate Authority. Based on https://github.com/ikreymer/certauth",
   "Mappings" : {
     "Constants": {
       "ProjectName": {"Value":"SSM-CA","LowCaseValue":"ssm-ca"},
-      "Version": {"Value":"0-0-2"}
+      "Version": {"Value":"0-0-3"}
     }
   },
   "Parameters" : {
@@ -607,7 +607,100 @@
           ]
         }
       }
+    },
+    "AcmImportCertificate": {
+      "Type" : "AWS::SSM::Document",
+      "Properties" : {
+        "DocumentType" : "Automation",
+        "Attachments":[
+           {
+            "Name":"@ARTIFACT@",
+            "Key":"S3FileUrl",
+            "Values":[{"Fn::Sub":"${TemplatesS3Url}/@ARTIFACT@"}]
+           }
+        ],
+        "Tags" : [
+           {"Key":"lz:project","Value" : {"Fn::FindInMap": ["Constants","ProjectName","Value"]}},
+           {"Key":"lz:automation:operation","Value" : "SSM-CA.NewServerCertificate"}
+        ],
+        "Content" : {
+          "schemaVersion":"0.3",
+          "description": "Imports an existing certificate in AWS ACM",
+          "assumeRole": {"Fn::GetAtt":"SsmAutomationRole.Arn"},
+          "parameters": {
+            "CaName": {
+              "type":"String"
+            },
+            "CommonName": {
+              "type": "String"
+            },
+            "ParametersPrefix": {
+              "type": "String",
+              "default": {"Fn::Sub":"${ParametersPrefix}"}
+            }
+          },
+          "files":{
+            "@ARTIFACT@": {
+              "checksums":{
+                "sha256":"@SHA256@"
+              }
+            }
+          },
+          "mainSteps": [
+            {
+              "name": "CheckIfCaExists",
+              "action":"aws:executeScript",
+              "onFailure":"Abort",
+              "inputs": {
+                "Runtime": "python3.8",
+                "Handler": "handler",
+                "InputPayload": {
+                  "prefix":"{{ParametersPrefix}}",
+                  "CaName":"{{CaName}}",
+                  "CommonName":"{{CommonName}}"
+                },
+                "Script": {"Fn::Join":["",[
+                  "import boto3\n",
+                  "def handler(events,context):\n",
+                  "  prefix=events['prefix']\n",
+                  "  prefix= prefix if prefix.endswith('/') else f'{prefix}/'\n",
+                  "  ca_name=events['CaName']\n",
+                  "  common_name=events['CommonName']\n",
+                  "  ssm=boto3.client('ssm')\n",
+                  "  result = ssm.get_parameters_by_path(Path=f'{prefix}{ca_name}/',Recursive=True,WithDecryption=True)\n",
+                  "  if not len(result['Parameters']) > 0:\n",
+                  "    exists = False\n",
+                  "    raise Exception(f'Certificate Authority {prefix}{ca_name} does not exist.')\n",
+                  "  else:\n",
+                  "    exists = True\n",
+                  "  args = f'{prefix}{ca_name} -s -l \"{common_name}\" -A'\n",
+                  "  return {'Args': args}\n"
+                ]]}
+              },
+              "outputs": [
+                {
+                  "Name":"Args",
+                  "Selector":"$.Payload.Args",
+                  "Type":"String"
+                }
+              ]
+            },
+            {
+              "name": "ImportCertificate",
+              "action":"aws:executeScript",
+              "onFailure":"Abort",
+              "inputs": {
+                "Runtime": "python3.7",
+                "Handler": "certauth.handler",
+                "InputPayload": {
+                  "args":"{{CheckIfCaExists.Args}}"
+                },
+                "Attachment":"@ARTIFACT@"
+              }
+            }
+          ]
+        }
+      }
     }
-    
   }
 }

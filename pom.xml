@@ -2,7 +2,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>dxciber</groupId>
   <artifactId>ssm-certauth</artifactId>
-  <version>0.0.2-SNAPSHOT</version>
+  <version>0.0.3-SNAPSHOT</version>
   <properties>
    <artifactrepo.url>s3://automation-dxciber-ops</artifactrepo.url>
    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
