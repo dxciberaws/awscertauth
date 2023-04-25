@@ -29,12 +29,14 @@ import datetime
 # https://casecurity.org/2015/02/19/ssl-certificate-validity-periods-limited-to-39-months-starting-in-april/
 CERT_NOT_AFTER = 3 * 365 * 24 * 60 * 60
 
+CRL_VALIDITY_DAYS = 365
+
 CERTS_DIR = './ca/certs/'
 
 CERT_NAME = 'DXC AWS LZ CA'
 SSM_PREFIX = '/CA/'
 
-DEF_HASH_FUNC = 'sha256'
+DEF_HASH_FUNC = 'sha256'.decode('utf8')
 
 ROOT_CA = 'root_ca'
 
@@ -379,15 +381,14 @@ class CertificateAuthority(object):
     def generate_crl(self,hash_func=DEF_HASH_FUNC):
         issuerCert = self.ca_cert
         issuerKey = self.ca_key
-        digest='sha256'
         revokedList = self.cert_cache.get_revoked_list()
         crl = crypto.CRL()
         now = datetime.datetime.now()
         crl.set_lastUpdate(now.strftime('%Y%m%d%H%M%SZ').encode('utf-8'))
-        crl.set_nextUpdate((now + datetime.timedelta(days=1)).strftime('%Y%m%d%H%M%SZ').encode('utf-8'))
+        crl.set_nextUpdate((now + datetime.timedelta(days=CRL_VALIDITY_DAYS)).strftime('%Y%m%d%H%M%SZ').encode('utf-8'))
         for revoked in revokedList:
             crl.add_revoked(revoked)
-        crl.sign(issuerCert, issuerKey, hash_func.encode('utf8'))
+        crl.sign(issuerCert, issuerKey, hash_func)
         return crl
     
     def write_pem(self, buff, cert, key):
@@ -711,7 +712,10 @@ def main(args=None):
     if not hostname and not clientname:
         if r.revoke_list:
             crl = ca.generate_crl()
-            crl_pem = crypto.dump_crl(crypto.FILETYPE_PEM, crl)
+            # Work around Bug https://github.com/pyca/pyopenssl/issues/794 that does not set the next update field
+            #crl_pem = crypto.dump_crl(crypto.FILETYPE_PEM, crl)
+            root_cert, root_key = cert_cache.split_pem(ca.get_root_pem().decode())
+            crl_pem = crl.export(root_cert,root_key,crypto.FILETYPE_PEM,days=CRL_VALIDITY_DAYS,digest=DEF_HASH_FUNC)
             if r.revoke_list.startswith('s3://'):
                 match = re.match('s3://(.*?)/(.*)',r.revoke_list)
                 bucket = match.group(1)

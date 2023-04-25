@@ -200,7 +200,7 @@ CLI Usage Examples
     -r, --revoke
                         Combined with -l or -n to specify the cn, revocates the indicated certificate
     -R, --revoke_list REVOKE_LIST
-                        Generates a CRL file and stores it at `REVOKE_LIST`, that can be a local file or an S3 obejct URI
+                        Generates a CRL file with next update in 365 days and stores it at `REVOKE_LIST`, that can be a local file or an S3 obejct URI
     -A, --acm-import
                         Imports the certificate with CN given by -n or -l to AWS ACM. If -n or -l is not given the root_ca is imported
 
