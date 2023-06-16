@@ -36,7 +36,7 @@ CERTS_DIR = './ca/certs/'
 CERT_NAME = 'DXC AWS LZ CA'
 SSM_PREFIX = '/CA/'
 
-DEF_HASH_FUNC = 'sha256'.decode('utf8')
+DEF_HASH_FUNC = b'sha256'.decode('utf8')
 
 ROOT_CA = 'root_ca'
 
@@ -388,7 +388,7 @@ class CertificateAuthority(object):
         crl.set_nextUpdate((now + datetime.timedelta(days=CRL_VALIDITY_DAYS)).strftime('%Y%m%d%H%M%SZ').encode('utf-8'))
         for revoked in revokedList:
             crl.add_revoked(revoked)
-        crl.sign(issuerCert, issuerKey, hash_func)
+        crl.sign(issuerCert, issuerKey, hash_func.encode('utf-8'))
         return crl
     
     def write_pem(self, buff, cert, key):
@@ -714,8 +714,8 @@ def main(args=None):
             crl = ca.generate_crl()
             # Work around Bug https://github.com/pyca/pyopenssl/issues/794 that does not set the next update field
             #crl_pem = crypto.dump_crl(crypto.FILETYPE_PEM, crl)
-            root_cert, root_key = cert_cache.split_pem(ca.get_root_pem().decode())
-            crl_pem = crl.export(root_cert,root_key,crypto.FILETYPE_PEM,days=CRL_VALIDITY_DAYS,digest=DEF_HASH_FUNC)
+            root_cert, root_key = ca.read_pem(BytesIO(ca.get_root_pem()))
+            crl_pem = crl.export(root_cert,root_key,crypto.FILETYPE_PEM,days=CRL_VALIDITY_DAYS,digest=DEF_HASH_FUNC.encode('utf8'))
             if r.revoke_list.startswith('s3://'):
                 match = re.match('s3://(.*?)/(.*)',r.revoke_list)
                 bucket = match.group(1)
